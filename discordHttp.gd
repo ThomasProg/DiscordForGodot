@@ -4,12 +4,50 @@ class_name DiscordHttp
 var bot_token = ""
 var appID = ""
 
-func on_request_completed(result, response_code, headers, body: PackedByteArray):
+var queue:Array[HttpRequestPostArgs] = []
+
+var http_request = HTTPRequest.new()
+
+func _ready():
+	add_child(http_request)
+	http_request.request_completed.connect(on_queue_request_completed)
+	
+func run_request(post:HttpRequestPostArgs):
+	post.request(http_request)
+	
+func add_request(url:String, headers, body):
+	var post = HttpRequestPostArgs.new()
+	post.url = url
+	post.headers = headers
+	post.body = body
+	
+	if (queue.is_empty()):
+		run_request(post)		
+	
+	queue.push_back(post)
+
+func request_next():
+	queue.pop_front()
+	if (!queue.is_empty()):
+		run_request(queue.front())
+
+func on_queue_request_completed(result, response_code, headers, body: PackedByteArray):
 	if response_code >= 200 and response_code < 300:
 		print("Message sent successfully!")
+		request_next()
 		#print(body.get_string_from_utf8())
 	else:
 		print("Failed to send message with error %s / %s: %s" % [response_code, result, body.get_string_from_utf8()])
+		print("Retrying:")
+		if (response_code == 429):
+			var response = JSON.parse_string(body.get_string_from_utf8())
+			get_tree().create_timer(response["retry_after"]).timeout.connect(func(): run_request(queue.front()))
+		elif (response_code == 404):
+			print("Unknown interaction ; took too much time to reply to the command")
+			request_next()
+		else:
+			run_request(queue.front())
+			
 
 func dictionary_to_packed_string_array(dictionary: Dictionary) -> PackedStringArray:
 	var packed_array = PackedStringArray()
@@ -22,9 +60,6 @@ func dictionary_to_packed_string_array(dictionary: Dictionary) -> PackedStringAr
 
 # https://forum.godotengine.org/t/uploading-file-to-server-through-rest/6402/2
 func send_message_with_attachment(channel_id: String, content: String, image:Image):
-	var http_request = HTTPRequest.new()
-	add_child(http_request)
-	http_request.request_completed.connect(on_request_completed)
 	
 	var body = PackedByteArray()
 
@@ -61,7 +96,8 @@ func send_message_with_attachment(channel_id: String, content: String, image:Ima
 		"Content-Type: multipart/form-data; boundary=\"BodyBoundaryHere\""
 	]
 
-	http_request.request_raw(url, headers, HTTPClient.METHOD_POST, body)
+	add_request(url, headers, body)
+	#http_request.request_raw(url, headers, HTTPClient.METHOD_POST, body)
 	
 	
 	
@@ -70,9 +106,6 @@ func respond_command_with_attachment(interaction_id: String, interaction_token: 
 	if (image == null):
 		push_error("invalid image")
 	
-	var http_request = HTTPRequest.new()
-	add_child(http_request)
-	http_request.request_completed.connect(on_request_completed)
 	
 	var body = PackedByteArray()
 
@@ -115,14 +148,19 @@ func respond_command_with_attachment(interaction_id: String, interaction_token: 
 		"Content-Length: " + str(body.size()),
 		"Content-Type: multipart/form-data; boundary=\"BodyBoundaryHere\""
 	]
+	
+	var httpRequestTemp = HTTPRequest.new()
+	add_child(httpRequestTemp)
+	
+	httpRequestTemp.request_completed.connect(func (result, response_code, headers, body: PackedByteArray):
+		httpRequestTemp.queue_free()
+		)
 
-	http_request.request_raw(url, headers, HTTPClient.METHOD_POST, body)
+	#add_request(url, headers, body)
+	httpRequestTemp.request_raw(url, headers, HTTPClient.METHOD_POST, body)
 	
 	
 func respond_command(interaction_id: String, interaction_token: String, content: String, ephemeral:bool = false):
-	var http_request = HTTPRequest.new()
-	add_child(http_request)
-	http_request.request_completed.connect(on_request_completed)
 	
 	var body = PackedByteArray()
 
@@ -163,14 +201,19 @@ func respond_command(interaction_id: String, interaction_token: String, content:
 		"Content-Type: multipart/form-data; boundary=\"BodyBoundaryHere\""
 	]
 
-	http_request.request_raw(url, headers, HTTPClient.METHOD_POST, body)
+	var httpRequestTemp = HTTPRequest.new()
+	add_child(httpRequestTemp)
+	
+	httpRequestTemp.request_completed.connect(func (result, response_code, headers, body: PackedByteArray):
+		httpRequestTemp.queue_free()
+		)
+	
+	#add_request(url, headers, body)
+	httpRequestTemp.request_raw(url, headers, HTTPClient.METHOD_POST, body)
 	
 	
 
 func send_message(channel_id: String, content: String):
-	var http_request = HTTPRequest.new()
-	add_child(http_request)
-	http_request.request_completed.connect(on_request_completed)
 	
 	var message_data = {
 		"content": content
@@ -182,7 +225,8 @@ func send_message(channel_id: String, content: String):
 		"Content-Type": "application/json"
 	}
 
-	http_request.request(url, dictionary_to_packed_string_array(headers), HTTPClient.METHOD_POST, JSON.stringify(message_data))
+	add_request(url, dictionary_to_packed_string_array(headers), JSON.stringify(message_data))
+	#http_request.request(url, dictionary_to_packed_string_array(headers), HTTPClient.METHOD_POST, JSON.stringify(message_data))
 	
 func register_slash_command(cmd: SlashCommand):
 	register_slash_command_internal(cmd.name, cmd.description, cmd.options)
@@ -192,9 +236,6 @@ func register_guild_slash_command(cmd: SlashCommand, guildID:String):
 	
 # https://discord.com/developers/docs/interactions/application-commands#registering-a-command
 func register_slash_command_internal(name:String, description:String, options:Array[Dictionary]):
-	var http_request = HTTPRequest.new()
-	add_child(http_request)
-	http_request.request_completed.connect(on_request_completed)
 	
 	var message_data = {
 		"name": name,
@@ -208,13 +249,11 @@ func register_slash_command_internal(name:String, description:String, options:Ar
 		"Content-Type": "application/json"
 	}
 
-	http_request.request(url, dictionary_to_packed_string_array(headers), HTTPClient.METHOD_POST, JSON.stringify(message_data))
+	add_request(url, dictionary_to_packed_string_array(headers), JSON.stringify(message_data))
+	#http_request.request(url, dictionary_to_packed_string_array(headers), HTTPClient.METHOD_POST, JSON.stringify(message_data))
 	
 # https://discord.com/developers/docs/interactions/application-commands#registering-a-command
 func register_guild_slash_command_internal(name:String, guildID:String, description:String, options:Array[Dictionary]):
-	var http_request = HTTPRequest.new()
-	add_child(http_request)
-	http_request.request_completed.connect(on_request_completed)
 	
 	var message_data = {
 		"name": name,
@@ -229,7 +268,7 @@ func register_guild_slash_command_internal(name:String, guildID:String, descript
 		"Authorization": "Bot " + bot_token,
 		"Content-Type": "application/json"
 	}
-
-	http_request.request(url, dictionary_to_packed_string_array(headers), HTTPClient.METHOD_POST, JSON.stringify(message_data))
-	#http_request.request(url, dictionary_to_packed_string_array(headers), HTTPClient.METHOD_POST, JSON.stringify(json))
+	
+	add_request(url, dictionary_to_packed_string_array(headers), JSON.stringify(message_data))
+	#http_request.request(url, dictionary_to_packed_string_array(headers), HTTPClient.METHOD_POST, JSON.stringify(message_data))
 

@@ -125,6 +125,7 @@ func handle_gateway_packet(data: String):
 			print("invalid session")
 			if (payload["d"]):
 				print("can resume")
+				await resume()
 			else:
 				print("cannot resume")
 				await login(bot_token)
@@ -221,9 +222,12 @@ func resume():
 
 func on_connection_closed(clean, code, reason):
 	print("WebSocket connection closed. Clean:", clean, "Code:", code, "Reason:", reason)
-	await resume()
-
 	
+	if (clean):
+		await login(bot_token)
+	else:
+		await resume()
+
 
 func on_connection_closing(clean, code, reason):
 	print("WebSocket connection closing. Clean:", clean, "Code:", code, "Reason:", reason)
